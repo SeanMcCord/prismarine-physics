@@ -3,11 +3,11 @@ const AABB = require('./lib/aabb')
 const math = require('./lib/math')
 const features = require('./lib/features')
 
-function makeSupportFeature (mcData) {
-  return feature => features.some(({ name, versions }) => name === feature && versions.includes(mcData.version.majorVersion))
+function makeSupportFeature(mcData) {
+  return feature => features.some(({name, versions}) => name === feature && versions.includes(mcData.version.majorVersion))
 }
 
-function Physics (mcData, world) {
+function Physics(mcData, world) {
   const supportFeature = makeSupportFeature(mcData)
   const blocksByName = mcData.blocksByName
 
@@ -88,18 +88,18 @@ function Physics (mcData, world) {
     physics.lavaGravity = physics.gravity / 4
   }
 
-  function getPlayerBB (pos) {
+  function getPlayerBB(pos) {
     const w = physics.playerHalfWidth
     return new AABB(-w, 0, -w, w, physics.playerHeight, w).offset(pos.x, pos.y, pos.z)
   }
 
-  function setPositionToBB (bb, pos) {
+  function setPositionToBB(bb, pos) {
     pos.x = bb.minX + physics.playerHalfWidth
     pos.y = bb.minY
     pos.z = bb.minZ + physics.playerHalfWidth
   }
 
-  function getSurroundingBBs (world, queryBB) {
+  function getSurroundingBBs(world, queryBB) {
     const surroundingBBs = []
     const cursor = new Vec3(0, 0, 0)
     for (cursor.y = Math.floor(queryBB.minY) - 1; cursor.y <= Math.floor(queryBB.maxY); cursor.y++) {
@@ -132,7 +132,7 @@ function Physics (mcData, world) {
     pos.y += dy
   }
 
-  function moveEntity (entity, world, dx, dy, dz) {
+  function moveEntity(entity, world, dx, dy, dz) {
     const vel = entity.vel
     const pos = entity.pos
 
@@ -337,7 +337,7 @@ function Physics (mcData, world) {
     }
   }
 
-  function applyHeading (entity, strafe, forward, multiplier) {
+  function applyHeading(entity, strafe, forward, multiplier) {
     let speed = Math.sqrt(strafe * strafe + forward * forward)
     if (speed < 0.01) return new Vec3(0, 0, 0)
 
@@ -350,22 +350,23 @@ function Physics (mcData, world) {
     const sin = Math.sin(yaw)
     const cos = Math.cos(yaw)
 
+    // TODO: Not 100% sure this is correct
     const vel = entity.vel
     vel.x += strafe * cos - forward * sin
     vel.z += forward * cos + strafe * sin
   }
 
-  function isOnLadder (world, pos) {
+  function isOnLadder(world, pos) {
     const block = world.getBlock(pos)
     return (block && (block.type === ladderId || block.type === vineId))
   }
 
-  function doesNotCollide (world, pos) {
+  function doesNotCollide(world, pos) {
     const pBB = getPlayerBB(pos)
     return !getSurroundingBBs(world, pBB).some(x => pBB.intersects(x)) && getWaterInBB(world, pBB).length === 0
   }
 
-  function moveEntityWithHeading (entity, world, strafe, forward) {
+  function moveEntityWithHeading(entity, world, strafe, forward) {
     const vel = entity.vel
     const pos = entity.pos
 
@@ -377,12 +378,24 @@ function Physics (mcData, world) {
       let inertia = physics.airborneInertia
       const blockUnder = world.getBlock(pos.offset(0, -1, 0))
       if (entity.onGround && blockUnder) {
-        inertia = (blockSlipperiness[blockUnder.type] || physics.defaultSlipperiness) * 0.91
+        inertia = (blockSlipperiness[blockUnder.type] || physics.defaultSlipperiness) * physics.airborneInertia
+        // TODO: where does this value come from?
         acceleration = 0.1 * (0.1627714 / (inertia * inertia * inertia))
       }
       if (entity.control.sprint) acceleration *= physics.sprintSpeed
       if (entity.speed > 0) acceleration *= physics.speedEffect * entity.speed
       if (entity.slowness > 0) acceleration *= physics.slowEffect * entity.slowness
+
+      // Apply friction and gravity
+      if (entity.levitation > 0) {
+        vel.y += (0.05 * entity.levitation - vel.y) * 0.2
+      } else {
+        vel.y -= physics.gravity * gravityMultiplier
+      }
+      vel.y *= physics.airdrag
+      // vel.x * St * 0.91
+      vel.x *= inertia
+      vel.z *= inertia
 
       applyHeading(entity, strafe, forward, acceleration)
 
@@ -399,15 +412,6 @@ function Physics (mcData, world) {
         vel.y = physics.ladderClimbSpeed // climb ladder
       }
 
-      // Apply friction and gravity
-      if (entity.levitation > 0) {
-        vel.y += (0.05 * entity.levitation - vel.y) * 0.2
-      } else {
-        vel.y -= physics.gravity * gravityMultiplier
-      }
-      vel.y *= physics.airdrag
-      vel.x *= inertia
-      vel.z *= inertia
     } else {
       // Water / Lava movement
       const lastY = pos.y
@@ -428,12 +432,13 @@ function Physics (mcData, world) {
         if (entity.dolphinsGrace > 0) horizontalInertia = 0.96
       }
 
-      applyHeading(entity, strafe, forward, acceleration)
-      moveEntity(entity, world, vel.x, vel.y, vel.z)
       vel.y *= inertia
       vel.y -= (entity.isInWater ? physics.waterGravity : physics.lavaGravity) * gravityMultiplier
       vel.x *= horizontalInertia
       vel.z *= horizontalInertia
+
+      applyHeading(entity, strafe, forward, acceleration)
+      moveEntity(entity, world, vel.x, vel.y, vel.z)
 
       if (entity.isCollidedHorizontally && doesNotCollide(world, pos.offset(vel.x, vel.y + 0.6 - pos.y + lastY, vel.z))) {
         vel.y = physics.outOfLiquidImpulse // jump out of liquid
@@ -441,7 +446,7 @@ function Physics (mcData, world) {
     }
   }
 
-  function isMaterialInBB (world, queryBB, type) {
+  function isMaterialInBB(world, queryBB, type) {
     const cursor = new Vec3(0, 0, 0)
     for (cursor.y = Math.floor(queryBB.minY); cursor.y <= Math.floor(queryBB.maxY); cursor.y++) {
       for (cursor.z = Math.floor(queryBB.minZ); cursor.z <= Math.floor(queryBB.maxZ); cursor.z++) {
@@ -454,11 +459,11 @@ function Physics (mcData, world) {
     return false
   }
 
-  function getLiquidHeightPcent (block) {
+  function getLiquidHeightPcent(block) {
     return (getRenderedDepth(block) + 1) / 9
   }
 
-  function getRenderedDepth (block) {
+  function getRenderedDepth(block) {
     if (!block) return -1
     if (waterLike.has(block.type)) return 0
     if (block.getProperties().waterlogged) return 0
@@ -467,7 +472,7 @@ function Physics (mcData, world) {
     return meta >= 8 ? 0 : meta
   }
 
-  function getFlow (world, block) {
+  function getFlow(world, block) {
     const curlevel = getRenderedDepth(block)
     const flow = new Vec3(0, 0, 0)
     for (const [dx, dz] of [[0, 1], [-1, 0], [0, -1], [1, 0]]) {
@@ -502,7 +507,7 @@ function Physics (mcData, world) {
     return flow.normalize()
   }
 
-  function getWaterInBB (world, bb) {
+  function getWaterInBB(world, bb) {
     const waterBlocks = []
     const cursor = new Vec3(0, 0, 0)
     for (cursor.y = Math.floor(bb.minY); cursor.y <= Math.floor(bb.maxY); cursor.y++) {
@@ -519,7 +524,7 @@ function Physics (mcData, world) {
     return waterBlocks
   }
 
-  function isInWaterApplyCurrent (world, bb, vel) {
+  function isInWaterApplyCurrent(world, bb, vel) {
     const acceleration = new Vec3(0, 0, 0)
     const waterBlocks = getWaterInBB(world, bb)
     const isInWater = waterBlocks.length > 0
@@ -565,6 +570,7 @@ function Physics (mcData, world) {
         }
         if (entity.control.sprint) {
           const yaw = Math.PI - entity.yaw
+          // TODO: handle strafe
           vel.x -= Math.sin(yaw) * 0.2
           vel.z += Math.cos(yaw) * 0.2
         }
@@ -578,6 +584,7 @@ function Physics (mcData, world) {
     let strafe = (entity.control.right - entity.control.left) * 0.98
     let forward = (entity.control.forward - entity.control.back) * 0.98
 
+    // TODO: why do this when sprint isn't used?
     if (entity.control.sneak) {
       strafe *= physics.sneakSpeed
       forward *= physics.sneakSpeed
@@ -591,7 +598,7 @@ function Physics (mcData, world) {
   return physics
 }
 
-function getEffectLevel (mcData, effectName, effects) {
+function getEffectLevel(mcData, effectName, effects) {
   const effectDescriptor = mcData.effectsByName[effectName]
   if (!effectDescriptor) {
     return 0
@@ -603,7 +610,7 @@ function getEffectLevel (mcData, effectName, effects) {
   return effectInfo.amplifier + 1
 }
 
-function getEnchantmentLevel (mcData, enchantmentName, enchantments) {
+function getEnchantmentLevel(mcData, enchantmentName, enchantments) {
   const enchantmentDescriptor = mcData.enchantmentsByName[enchantmentName]
   if (!enchantmentDescriptor) {
     return 0
@@ -621,7 +628,7 @@ function getEnchantmentLevel (mcData, enchantmentName, enchantments) {
   return 0
 }
 
-function getStatusEffectNamesForVersion (supportFeature) {
+function getStatusEffectNamesForVersion(supportFeature) {
   if (supportFeature('effectNamesAreRegistryNames')) {
     return {
       jumpBoostEffectName: 'jump_boost',
@@ -644,7 +651,7 @@ function getStatusEffectNamesForVersion (supportFeature) {
 }
 
 class PlayerState {
-  constructor (bot, control) {
+  constructor(bot, control) {
     const mcData = require('minecraft-data')(bot.version)
     const nbt = require('prismarine-nbt')
     const supportFeature = makeSupportFeature(mcData)
@@ -688,7 +695,7 @@ class PlayerState {
     }
   }
 
-  apply (bot) {
+  apply(bot) {
     bot.entity.position = this.pos
     bot.entity.velocity = this.vel
     bot.entity.onGround = this.onGround
@@ -702,4 +709,4 @@ class PlayerState {
   }
 }
 
-module.exports = { Physics, PlayerState }
+module.exports = {Physics, PlayerState}
